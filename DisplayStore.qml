@@ -6,7 +6,7 @@ import "Model.js" as Model
 
 // Shared state for the bar popup and the arrangement window. Every
 // hl.monitor change is applied live through `hyprctl eval` and reverted
-// after revertSeconds unless kept. Keep writes the whole layout into a
+// after revertSeconds unless kept. Keep merges the connected displays into a
 // managed block in ~/.config/hypr/monitors.lua.
 Item {
   id: store
@@ -109,7 +109,7 @@ Item {
 
   function keep() {
     var lines = []
-    for (var i = 0; i < displays.length; i++) lines.push(Model.luaLine(settingsFor(displays[i])))
+    for (var i = 0; i < displays.length; i++) lines.push(Model.luaLine(Model.persistedSettings(settingsFor(displays[i]), displays[i].modes)))
     pending = {}
     luaFileProc.command = ["bash", "-c", "printf '%s\\n' \"$1\" | \"$0\" write", store.luaScript, lines.join("\n")]
     luaFileProc.running = true
