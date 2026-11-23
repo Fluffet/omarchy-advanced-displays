@@ -1,6 +1,6 @@
 # Advanced Displays
 
-Full monitor control for Omarchy. Resolution, arrangement, refresh rate, scale, rotation, mirroring, VRR, HDR and brightness, per display.
+Full monitor control for Omarchy. Resolution, arrangement, refresh rate, scale, rotation, mirroring, VRR, HDR, HDR white point and brightness, per display.
 
 <p align="center">
   <img src="preview.png" alt="Display panel" height="360">
@@ -48,6 +48,7 @@ Press **Forget saved layout** first if you also want your monitor settings gone.
 <summary>Small print</summary>
 
 - HDR only appears if the monitor's EDID says it supports it.
+- With HDR on, the **SDR white point** slider sets how bright ordinary SDR content is (Hyprland's `sdr_max_luminance`). Raise it if the desktop looks dim in HDR; the slider's ceiling is the panel's EDID peak luminance.
 - VRR shows the EDID refresh range as a hint.
 - Brightness uses the backlight on laptops, DDC on desktop monitors.
 - Move the widget like any other: `omarchy bar move io.github.fluffet.display --section right`

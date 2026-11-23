@@ -109,6 +109,10 @@ function parseMonitors(raw) {
       mirrorOf: m.mirrorOf && m.mirrorOf !== "none" ? String(m.mirrorOf) : "",
       vrr: Number(m.vrr) || 0,
       hdr: String(m.colorManagementPreset || "").toLowerCase() === "hdr",
+      sdrMaxLuminance: Math.round(Number(m.sdrMaxLuminance) || 0),
+      // Older Hyprland builds do not report sdrMaxLuminance and do not know
+      // the monitor-rule key either, so only offer the white point there.
+      sdrWhiteSupported: typeof m.sdrMaxLuminance === "number" && isFinite(m.sdrMaxLuminance),
       modes: modes
     }
   })
@@ -154,7 +158,9 @@ function settingsFromDisplay(d) {
     transform: d.transform,
     mirror: d.mirrorOf,
     vrr: d.vrr,
-    hdr: d.hdr
+    hdr: d.hdr,
+    sdrMaxLuminance: Number(d.sdrMaxLuminance) || 0,
+    sdrWhiteSupported: d.sdrWhiteSupported !== false
   }
 }
 
@@ -162,8 +168,43 @@ function luaString(text) {
   return '"' + String(text).replace(/[\\"]/g, "\\$&").replace(/[\r\n]/g, " ") + '"'
 }
 
+// SDR white point used when HDR is on, in cd/m². Hyprland's own default (80)
+// is far below a laptop panel's peak and makes the whole desktop look dim;
+// 203 is the usual SDR reference level, and the panel's slider goes up from
+// there to the display's EDID peak.
+var DEFAULT_SDR_WHITE = 203
+var SDR_WHITE_MIN = 80
+var SDR_WHITE_MAX = 1000
+
+function sdrWhite(s) {
+  var nits = Number(s.sdrMaxLuminance)
+  if (!isFinite(nits) || nits <= 0) nits = DEFAULT_SDR_WHITE
+  return Math.round(Math.max(SDR_WHITE_MIN, Math.min(SDR_WHITE_MAX, nits)))
+}
+
+// The range the white-point slider should cover for a peak luminance from
+// EDID. Unknown peaks fall back to a 500-nit ceiling.
+function sdrWhiteBounds(peak) {
+  var top = Math.round(Number(peak) || 0)
+  if (top <= SDR_WHITE_MIN) top = 500
+  return { min: SDR_WHITE_MIN, max: top }
+}
+
+// A reasonable first value when HDR is switched on and the display has none:
+// close to the panel's peak so SDR content keeps its SDR-mode brightness, but
+// capped so a very bright HDR display still keeps highlight headroom.
+function defaultSdrWhite(peak) {
+  var top = Math.round(Number(peak) || 0)
+  if (top <= 0) return DEFAULT_SDR_WHITE
+  return Math.round(Math.max(DEFAULT_SDR_WHITE, Math.min(480, top * 0.95)))
+}
+
 // One hl.monitor({...}) call. Used verbatim for `hyprctl eval` and for monitors.lua.
-function luaLine(s) {
+// opts.resetSdr names the SDR preset explicitly; only a live change needs it,
+// because Hyprland does not reset a preset that is already applied when a new
+// rule omits `cm`. Persisted rules stay minimal so they don't pin the preset.
+function luaLine(s, opts) {
+  opts = opts || {}
   var fields = ["output = " + luaString(s.output)]
   if (s.disabled) {
     fields.push("disabled = true")
@@ -175,18 +216,31 @@ function luaLine(s) {
   fields.push("transform = " + s.transform)
   if (s.mirror) fields.push("mirror = " + luaString(s.mirror))
   if (s.vrr) fields.push("vrr = " + s.vrr)
-  if (s.hdr) fields.push("cm = \"hdr\", bitdepth = 10")
+  // sdr_max_luminance: SDR white point in HDR mode. Hyprland's default of 80
+  // nits is far below most panels' peak; the HDR slider in the panel raises it.
+  if (s.hdr) {
+    var cm = "cm = \"hdr\", bitdepth = 10"
+    if (s.sdrWhiteSupported !== false) cm += ", sdr_max_luminance = " + sdrWhite(s)
+    fields.push(cm)
+  } else if (opts.resetSdr) {
+    fields.push("cm = \"srgb\"")
+  }
   return "hl.monitor({ " + fields.join(", ") + " })"
 }
 
-// Output of the edid script in Panel.qml: "name\thdr\tmin-max" per line.
+// Output of the edid script in DisplayStore.qml: "name\thdr\tmin-max\tpeak"
+// per line, where peak is the HDR max luminance in cd/m² (0 when unknown).
 function parseEdid(raw) {
   var byName = {}
   var lines = String(raw || "").split("\n")
   for (var i = 0; i < lines.length; i++) {
     var parts = lines[i].split("\t")
     if (parts.length < 2 || !parts[0]) continue
-    byName[parts[0]] = { hdr: parts[1] === "1", range: parts[2] || "" }
+    byName[parts[0]] = {
+      hdr: parts[1] === "1",
+      range: parts[2] || "",
+      peak: Math.round(Number(parts[3]) || 0)
+    }
   }
   return byName
 }
@@ -340,6 +394,9 @@ if (typeof module !== "undefined") {
     refreshRates: refreshRates,
     settingsFromDisplay: settingsFromDisplay,
     luaLine: luaLine,
+    sdrWhite: sdrWhite,
+    sdrWhiteBounds: sdrWhiteBounds,
+    defaultSdrWhite: defaultSdrWhite,
     parseEdid: parseEdid,
     parsePosition: parsePosition,
     logicalRect: logicalRect,
