@@ -12,7 +12,7 @@ const hyprctl = JSON.stringify([
   {
     name: "DP-3", description: "Dell Inc. DELL S2718D 2HV50768133L", model: "DELL S2718D", disabled: false, focused: false,
     width: 2560, height: 1440, refreshRate: 59.951, scale: 1, transform: 1, x: 1440, y: -480,
-    mirrorOf: "eDP-1", vrr: 1, colorManagementPreset: "hdr",
+    mirrorOf: "eDP-1", vrr: 1, colorManagementPreset: "hdr", sdrMaxLuminance: 400,
     availableModes: ["2560x1440@59.95Hz", "1920x1080@60.00Hz", "1920x1080@60.00Hz", "1920x1080@59.94Hz"]
   }
 ])
@@ -25,6 +25,9 @@ test("parseMonitors normalizes and dedupes modes", () => {
   assert.equal(dell.scale, "1")
   assert.equal(dell.mirrorOf, "eDP-1")
   assert.equal(dell.hdr, true)
+  assert.equal(dell.sdrMaxLuminance, 400)
+  assert.equal(dell.sdrWhiteSupported, true)
+  assert.equal(displays[0].sdrWhiteSupported, false)
   assert.equal(dell.internal, false)
   assert.equal(displays[0].internal, true)
   assert.deepEqual(dell.modes.map(m => Model.modeString(m.width, m.height, m.hz)),
@@ -60,10 +63,41 @@ test("luaLine renders a full display", () => {
   const displays = Model.parseMonitors(hyprctl)
   const dell = Model.settingsFromDisplay(displays[1])
   assert.equal(Model.luaLine(dell),
-    'hl.monitor({ output = "desc:Dell Inc. DELL S2718D 2HV50768133L", mode = "2560x1440@59.95", position = "1440x-480", scale = 1, transform = 1, mirror = "eDP-1", vrr = 1, cm = "hdr", bitdepth = 10 })')
+    'hl.monitor({ output = "desc:Dell Inc. DELL S2718D 2HV50768133L", mode = "2560x1440@59.95", position = "1440x-480", scale = 1, transform = 1, mirror = "eDP-1", vrr = 1, cm = "hdr", bitdepth = 10, sdr_max_luminance = 400 })')
   const boe = Model.settingsFromDisplay(displays[0])
   assert.equal(Model.luaLine(boe),
     'hl.monitor({ output = "desc:BOE NE135A1M-NY1", mode = "2880x1920@120.00", position = "0x0", scale = 2, transform = 0 })')
+})
+
+test("luaLine resets the preset explicitly only for a live SDR switch", () => {
+  const boe = Model.settingsFromDisplay(Model.parseMonitors(hyprctl)[0])
+  assert.doesNotMatch(Model.luaLine(boe), /cm =/)
+  assert.match(Model.luaLine(boe, { resetSdr: true }), /cm = "srgb" \}\)$/)
+})
+
+test("luaLine omits the white point on Hyprland builds without it", () => {
+  const dell = Model.settingsFromDisplay(Model.parseMonitors(hyprctl)[1])
+  dell.sdrWhiteSupported = false
+  assert.equal(Model.luaLine(dell),
+    'hl.monitor({ output = "desc:Dell Inc. DELL S2718D 2HV50768133L", mode = "2560x1440@59.95", position = "1440x-480", scale = 1, transform = 1, mirror = "eDP-1", vrr = 1, cm = "hdr", bitdepth = 10 })')
+})
+
+test("luaLine falls back and clamps the SDR white point", () => {
+  const s = Model.settingsFromDisplay(Model.parseMonitors(hyprctl)[1])
+  s.sdrMaxLuminance = 0
+  assert.match(Model.luaLine(s), /sdr_max_luminance = 203 \}\)$/)
+  s.sdrMaxLuminance = 5000
+  assert.match(Model.luaLine(s), /sdr_max_luminance = 1000 \}\)$/)
+  s.sdrMaxLuminance = 20
+  assert.match(Model.luaLine(s), /sdr_max_luminance = 80 \}\)$/)
+})
+
+test("sdr white defaults and slider bounds", () => {
+  assert.equal(Model.defaultSdrWhite(0), 203)
+  assert.equal(Model.defaultSdrWhite(300), 285)
+  assert.equal(Model.defaultSdrWhite(508), 480)
+  assert.deepEqual(Model.sdrWhiteBounds(0), { min: 80, max: 500 })
+  assert.deepEqual(Model.sdrWhiteBounds(508), { min: 80, max: 508 })
 })
 
 test("luaLine renders a disabled display and escapes quotes", () => {
@@ -89,9 +123,9 @@ test("settingsFromDisplay falls back for a disabled display", () => {
 })
 
 test("parseEdid", () => {
-  const edid = Model.parseEdid("eDP-1\t0\t30-120\nDP-3\t1\t\n\n")
-  assert.deepEqual(edid["eDP-1"], { hdr: false, range: "30-120" })
-  assert.deepEqual(edid["DP-3"], { hdr: true, range: "" })
+  const edid = Model.parseEdid("eDP-1\t0\t30-120\t\nDP-3\t1\t\t507.620\n\n")
+  assert.deepEqual(edid["eDP-1"], { hdr: false, range: "30-120", peak: 0 })
+  assert.deepEqual(edid["DP-3"], { hdr: true, range: "", peak: 508 })
 })
 
 test("logicalRect divides by scale and swaps when rotated", () => {

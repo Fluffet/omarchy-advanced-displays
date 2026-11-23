@@ -43,6 +43,21 @@ Panel {
     return options
   }
 
+  // HDR SDR-white slider range, capped by this panel's EDID peak luminance.
+  // Only offered when the running Hyprland understands sdr_max_luminance.
+  readonly property var sdrWhiteBounds: Model.sdrWhiteBounds(DisplayStore.selectedEdid.peak)
+  readonly property bool sdrWhiteSupported: DisplayStore.current ? DisplayStore.current.sdrWhiteSupported !== false : false
+
+  readonly property int sdrWhiteCurrent: {
+    var value = DisplayStore.current ? Number(DisplayStore.current.sdrMaxLuminance) || 0 : 0
+    return value > 0 ? value : root.sdrWhiteBounds.min
+  }
+
+  function snapSdrWhite(value) {
+    var stepped = Math.round(Number(value) / 10) * 10
+    return Math.max(root.sdrWhiteBounds.min, Math.min(root.sdrWhiteBounds.max, stepped))
+  }
+
   function openArrange() {
     root.close()
     if (root.bar && root.bar.shell) root.bar.shell.summon(DisplayStore.pluginId, "{}")
@@ -499,7 +514,15 @@ Panel {
                     foreground: root.bar.foreground
                     anchors.left: parent.left
                     anchors.verticalCenter: parent.verticalCenter
-                    onToggled: DisplayStore.change({ hdr: !DisplayStore.current.hdr })
+                    onToggled: {
+                      var on = !DisplayStore.current.hdr
+                      var patch = { hdr: on }
+                      // Hyprland defaults the white point to 80 nits, which
+                      // looks dim. Start from the panel's peak instead.
+                      if (on && root.sdrWhiteSupported && root.sdrWhiteCurrent < 100)
+                        patch.sdrMaxLuminance = Model.defaultSdrWhite(DisplayStore.selectedEdid.peak)
+                      DisplayStore.change(patch)
+                    }
                   }
 
                   Text {
@@ -511,6 +534,48 @@ Panel {
                     anchors.verticalCenter: parent.verticalCenter
                   }
                 }
+              }
+            }
+
+            Column {
+              width: parent.width
+              spacing: Style.space(6)
+              visible: DisplayStore.selectedEdid.hdr && root.sdrWhiteSupported && DisplayStore.current !== null && DisplayStore.current.hdr
+
+              Item {
+                width: parent.width
+                implicitHeight: sdrWhiteHeader.implicitHeight
+
+                PanelSectionHeader {
+                  id: sdrWhiteHeader
+                  text: "SDR WHITE POINT"
+                  foreground: root.bar.foreground
+                  fontFamily: root.bar.fontFamily
+                  anchors.left: parent.left
+                }
+
+                Text {
+                  text: (sdrWhiteSlider.dragging ? root.snapSdrWhite(sdrWhiteSlider.liveValue) : root.sdrWhiteCurrent) + " nits"
+                  color: Qt.darker(root.bar.foreground, 1.4)
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                  anchors.right: parent.right
+                  anchors.rightMargin: Style.space(6)
+                }
+              }
+
+              PanelSlider {
+                id: sdrWhiteSlider
+                bar: root.bar
+                width: parent.width - Style.space(12)
+                anchors.horizontalCenter: parent.horizontalCenter
+                minimum: root.sdrWhiteBounds.min
+                maximum: root.sdrWhiteBounds.max
+                step: 10
+                integer: true
+                value: root.sdrWhiteCurrent
+                onReleased: function(v) { DisplayStore.change({ sdrMaxLuminance: root.snapSdrWhite(v) }) }
               }
             }
           }

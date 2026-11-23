@@ -42,7 +42,7 @@ Item {
     return p ? p.after : Model.settingsFromDisplay(display)
   }
   readonly property var current: selected ? settingsFor(selected) : null
-  readonly property var selectedEdid: (selected && edid[selected.name]) || { hdr: false, range: "" }
+  readonly property var selectedEdid: (selected && edid[selected.name]) || { hdr: false, range: "", peak: 0 }
 
   // Enabled, non-mirrored displays with a real position, in logical pixels.
   readonly property var layoutRects: {
@@ -77,7 +77,9 @@ Item {
     next[name] = { before: before, after: after }
     pending = next
     secondsLeft = revertSeconds
-    runLua(Model.luaLine(after))
+    // Switching HDR off live needs an explicit SDR preset; other live edits
+    // leave the display's current color preset alone.
+    runLua(Model.luaLine(after, { resetSdr: before.hdr !== after.hdr && !after.hdr }))
   }
 
   function setEnabled(display, enabled) {
@@ -117,7 +119,8 @@ Item {
 
   function revert() {
     var lines = []
-    for (var name in pending) lines.push(Model.luaLine(pending[name].before))
+    for (var name in pending)
+      lines.push(Model.luaLine(pending[name].before, { resetSdr: !pending[name].before.hdr }))
     pending = {}
     if (lines.length) runLua(lines.join("\n"))
   }
@@ -162,10 +165,12 @@ Item {
     }
   }
 
-  // "name\thdr\tmin-max" per connected output, from the kernel's EDID copy.
+  // "name\thdr\tmin-max\tpeak" per connected output, from the kernel's EDID
+  // copy. peak is the HDR max luminance in cd/m² (empty when unknown), which
+  // sets the ceiling for the HDR white-point slider.
   Process {
     id: edidProc
-    command: ["bash", "-c", "for d in /sys/class/drm/card*-*/; do out=$(di-edid-decode \"$d/edid\" 2>/dev/null); [[ -n $out ]] || continue; base=${d%/}; base=${base##*/}; name=${base#*-}; hdr=0; grep -q 'HDR Static Metadata' <<<\"$out\" && hdr=1; range=$(grep -o -m1 '[0-9]*-[0-9]* Hz V' <<<\"$out\" | sed 's/ Hz V//'); printf '%s\\t%s\\t%s\\n' \"$name\" \"$hdr\" \"$range\"; done"]
+    command: ["bash", "-c", "for d in /sys/class/drm/card*-*/; do out=$(di-edid-decode \"$d/edid\" 2>/dev/null); [[ -n $out ]] || continue; base=${d%/}; base=${base##*/}; name=${base#*-}; hdr=0; grep -q 'HDR Static Metadata' <<<\"$out\" && hdr=1; range=$(grep -o -m1 '[0-9]*-[0-9]* Hz V' <<<\"$out\" | sed 's/ Hz V//'); peak=$(grep -m1 -E 'Desired content max luminance:|Maximum luminance:' <<<\"$out\" | sed -n 's/.*(\\([0-9][0-9.]*\\)[^)]*cd.*/\\1/p; s/.*: *\\([0-9][0-9.]*\\) *cd.*/\\1/p' | head -n1); printf '%s\\t%s\\t%s\\t%s\\n' \"$name\" \"$hdr\" \"$range\" \"$peak\"; done"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: store.edid = Model.parseEdid(text)
